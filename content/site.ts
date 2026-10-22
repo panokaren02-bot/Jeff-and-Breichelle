@@ -807,6 +807,8 @@ export const siteConfig = {
     // "" hides the verse — Ecclesiastes 3:11 is already shown in the Love Story
     quote: "",
     quoteCitation: "",
+    // false hides every event's time (the times stay below, ready to switch back on)
+    showTimes: false,
     // Optional corner decorations — leave "" to hide
     decos: {
       topLeft: "",
@@ -946,7 +948,10 @@ export const siteConfig = {
     decos: {
       ...CORNER_DECOS,
       headerOrnament: DECOR.headerOrnament,
-      footerVine: DECOR.headerOrnament,
+      footerVine: DECOR.footerVine,
+      // Sprig on the peak of the arched card and florals on its four corners ("" hides one)
+      archGarland: DECOR.headerOrnament,
+      cardCorners: { ...CORNER_DECOS, topLeft: "", topRight: "" },
     },
     // Thin double border around the section (false hides it)
     showFrame: true,

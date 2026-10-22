@@ -172,11 +172,12 @@ export function WeddingTimeline() {
       .split("{ceremony}").join(siteConfig.ceremony.location)
       .split("{reception}").join(siteConfig.reception.location)
 
-  // show: false keeps an event in site.ts but leaves it off the page
+  // show: false keeps an event in site.ts but leaves it off the page;
+  // showTimes: false hides every time for now
   const timelineEvents: TimelineEvent[] = content.events
     .filter((event) => event && event.show !== false)
     .map((event) => ({
-    time: event.time,
+    time: content.showTimes === false ? "" : event.time,
     title: event.title,
     location: event.location ? fillVenue(event.location) : undefined,
     icon: ICONS[event.icon] ?? RingsIcon,
@@ -380,14 +381,16 @@ function TimelineText({
 
   return (
     <div className={`max-w-md ${textAlign} ${align === "right" ? "ml-auto" : "mr-auto"}`}>
+      {event.time && (
+        <p
+          className={`${cinzel.className} ${timelineType.label} mb-1 font-semibold tracking-[0.2em] uppercase`}
+          style={{ color: ROSE, textShadow }}
+        >
+          {event.time}
+        </p>
+      )}
       <p
-        className={`${cinzel.className} ${timelineType.label} font-semibold tracking-[0.2em] uppercase`}
-        style={{ color: ROSE, textShadow }}
-      >
-        {event.time}
-      </p>
-      <p
-        className={`${theSeasons.className} mt-1 text-[1.15rem] leading-tight tracking-[0.04em] sm:text-[1.25rem] md:text-[1.175rem]`}
+        className={`${theSeasons.className} text-[1.15rem] leading-tight tracking-[0.04em] sm:text-[1.25rem] md:text-[1.175rem]`}
         style={{ color: INK, textShadow: titleShadow }}
       >
         <SpecialCharFont text={event.title} />

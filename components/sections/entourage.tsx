@@ -1117,7 +1117,7 @@ function PetalShower({ height }: { height: number }) {
   )
 }
 
-// Garland on the peak of the arch: blooms in, then sways a little
+// Sprig on the peak of the arch: blooms in, then sways a little
 function ArchGarland({ src }: { src: string }) {
   if (!src) return null
   return (
@@ -1140,27 +1140,35 @@ function ArchGarland({ src }: { src: string }) {
   )
 }
 
-// Bouquets resting on the bottom corners of the card
-function CornerBouquet({ src, side }: { src: string; side: "left" | "right" }) {
+type CardCornerName = "topLeft" | "topRight" | "bottomLeft" | "bottomRight"
+
+// Top florals tuck behind the arch's shoulders; bottom ones rest in front of the card's base
+const CARD_CORNER_PLACEMENT: Record<CardCornerName, { position: string; origin: string; tilt: number; layer: string }> = {
+  topLeft: { position: "-left-3 -top-3 sm:-left-6 sm:-top-5", origin: "origin-top-left", tilt: -10, layer: "z-10" },
+  topRight: { position: "-right-3 -top-3 sm:-right-6 sm:-top-5", origin: "origin-top-right", tilt: 10, layer: "z-10" },
+  bottomLeft: { position: "-bottom-6 -left-3 sm:-bottom-9 sm:-left-6", origin: "origin-bottom-left", tilt: -10, layer: "z-40" },
+  bottomRight: { position: "-bottom-6 -right-3 sm:-bottom-9 sm:-right-6", origin: "origin-bottom-right", tilt: 10, layer: "z-40" },
+}
+
+// A floral on one corner of the card: blooms in from its corner, then sways a little
+function CardCorner({ src, corner }: { src: string; corner: CardCornerName }) {
   if (!src) return null
-  const isLeft = side === "left"
+  const { position, origin, tilt, layer } = CARD_CORNER_PLACEMENT[corner]
   return (
     <motion.div
-      className={`pointer-events-none absolute -bottom-6 z-40 w-28 sm:-bottom-9 sm:w-44 md:w-52 ${
-        isLeft ? "-left-3 origin-bottom-left sm:-left-6" : "-right-3 origin-bottom-right sm:-right-6"
-      }`}
-      initial={{ opacity: 0, scale: 0.6, rotate: isLeft ? -10 : 10 }}
+      className={`pointer-events-none absolute w-24 sm:w-40 md:w-48 ${layer} ${position} ${origin}`}
+      initial={{ opacity: 0, scale: 0.6, rotate: tilt }}
       whileInView={{ opacity: 1, scale: 1, rotate: 0 }}
       viewport={{ once: true, amount: 0.4 }}
       transition={{ type: "spring", stiffness: 90, damping: 14 }}
       aria-hidden
     >
       <motion.div
-        className={isLeft ? "origin-bottom-left" : "origin-bottom-right"}
-        animate={{ rotate: isLeft ? [0, 1.6, 0] : [0, -1.6, 0] }}
-        transition={{ duration: 7, repeat: Infinity, ease: "easeInOut", delay: isLeft ? 0 : 1.2 }}
+        className={origin}
+        animate={{ rotate: [0, tilt * -0.16, 0] }}
+        transition={{ duration: 7, repeat: Infinity, ease: "easeInOut", delay: tilt > 0 ? 1.2 : 0 }}
       >
-        <DecoImg src={src} className={`block h-auto w-full select-none drop-shadow-md ${isLeft ? "" : "-scale-x-100"}`} />
+        <DecoImg src={src} className="block h-auto w-full select-none drop-shadow-md" />
       </motion.div>
     </motion.div>
   )
@@ -1527,8 +1535,9 @@ export function Entourage({ sponsorsList }: { sponsorsList?: SponsorsList } = {}
             </div>
           </div>
           <LaceHem />
-          <CornerBouquet src={decos.cornerBouquet} side="left" />
-          <CornerBouquet src={decos.cornerBouquet} side="right" />
+          {(Object.keys(CARD_CORNER_PLACEMENT) as CardCornerName[]).map((corner) => (
+            <CardCorner key={corner} src={decos.cardCorners[corner]} corner={corner} />
+          ))}
         </div>
         <motion.div
           initial={{ opacity: 0, y: 20, scale: 0.94 }}
