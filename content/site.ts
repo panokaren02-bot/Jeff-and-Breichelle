@@ -144,7 +144,7 @@ const RSVP = {
   coordinator: "{groom} / {bride}", // {groom} / {bride} → couple nicknames
   phone: "to be announced",
 }
-const HASHTAGS = ["#CidnyJasmine2026"] // ⚠ check — looks like it's from a previous couple
+const HASHTAGS = ["#FromJeffToForeverWithBrei"] // ⚠ check — looks like it's from a previous couple
 
 // ── Attire guide (Event Details → Attire Guidelines) ────────────────────────
 // SHOW = which cards to display AND their order, top to bottom. Examples:
@@ -853,7 +853,7 @@ export const siteConfig = {
       },
       {
         show: true,
-        time: "5:30 PM",
+        time: "11:00 AM",
         title: "Photo Session",
         description: "Join us for pictures with the newlyweds.",
         location: "{ceremony}",
@@ -862,7 +862,7 @@ export const siteConfig = {
       },
       {
         show: true,
-        time: "5:45 PM",
+        time: "11:45 AM",
         title: "Cocktail Hour",
         description: "Refreshments while we make our way to the reception.",
         location: "{reception}",
@@ -880,7 +880,7 @@ export const siteConfig = {
       },
       {
         show: true,
-        time: "7:00 PM",
+        time: "12:45 PM",
         title: "Grand Entrance",
         description: "Welcome the newlyweds as husband and wife.",
         location: "{reception}",
@@ -889,7 +889,7 @@ export const siteConfig = {
       },
       {
         show: true,
-        time: "7:30 PM",
+        time: "1:00 PM",
         title: "Wedding Feast",
         description: "Let's share a meal and celebrate together.",
         location: "{reception}",
@@ -898,7 +898,7 @@ export const siteConfig = {
       },
       {
         show: true,
-        time: "8:00 PM",
+        time: "2:00 PM",
         title: "Cake Cutting",
         description: "",
         location: "{reception}",
@@ -907,7 +907,7 @@ export const siteConfig = {
       },
       {
         show: true,
-        time: "8:30 PM",
+        time: "2:30 PM",
         title: "First Dance",
         description: "Our first dance as husband and wife.",
         location: "{reception}",
@@ -916,7 +916,7 @@ export const siteConfig = {
       },
       {
         show: true,
-        time: "9:00 PM",
+        time: "3:30 PM",
         title: "Send-off",
         description: "Thank you for celebrating with us!",
         location: "{reception}",
@@ -947,9 +947,6 @@ export const siteConfig = {
       ...CORNER_DECOS,
       headerOrnament: DECOR.headerOrnament,
       footerVine: DECOR.headerOrnament,
-      // Garland on the peak of the arched card and bouquets at its bottom corners
-      archGarland: "/deco/new-deco/small-center.png",
-      cornerBouquet: "/deco/new-deco/Blush Garden Rose Corner Bouquet.png",
     },
     // Thin double border around the section (false hides it)
     showFrame: true,
