@@ -3,6 +3,7 @@
 import React from "react"
 import { useState, useEffect, useMemo, useRef } from "react"
 import localFont from "next/font/local"
+import { MotionConfig, motion, useReducedMotion, useScroll, useSpring, type Variants } from "motion/react"
 import { Section } from "@/components/section"
 import { sectionType } from "@/lib/section-typography"
 import { Cinzel } from "next/font/google"
@@ -51,10 +52,6 @@ const onBg = {
 
 const onBgLineStyle = {
   background: "var(--color-ink-accent)",
-} as const
-
-const dividerLineStyle = {
-  background: "linear-gradient(to right, transparent, var(--color-motif-medium), transparent)",
 } as const
 
 const cardStyle = {
@@ -315,7 +312,7 @@ const ROLE_CATEGORY_ORDER = [
   "Little Tiny Groom",
   "Little Love Bearer",
   "Little Promise Bearer",
-  // Secondary Sponsors block (see secondarySponsorGroups)
+  // Secondary Sponsors chapter (see SECONDARY_SPONSOR_GROUPS)
   "Candle Sponsors",
   "Candle Bearer",
   "Veil Sponsors",
@@ -323,32 +320,15 @@ const ROLE_CATEGORY_ORDER = [
   "Ribbon Sponsors",
   "Groomsmen",
   "Bridesmaids",
-  // Side-by-side pairs (see PAIRED_COLUMN_SECTIONS)
+  // Little Groomsmen | Little Bridesmaids across the aisle
   "Little Groomsmen",
   "Little Bridesmaids",
-  // Ring | Coin side by side, Bible centered below (see BEARER_BLOCK_CATEGORIES)
+  // Ring | Coin across the aisle, Bible on the aisle below
   "Ring Bearer",
   "Coin Bearer",
   "Bible Bearer",
   "Flower Ladies",
 ]
-
-const BEARER_BLOCK_CATEGORIES = ["Ring Bearer", "Coin Bearer", "Bible Bearer"] as const
-
-// Two categories shown as left | right columns under their own titles
-const PAIRED_COLUMN_SECTIONS: { key: string; left: string; right: string }[] = [
-  { key: "LittleGroomsmenBridesmaids", left: "Little Groomsmen", right: "Little Bridesmaids" },
-]
-
-// Secondary sponsor groups whose names are split into two columns
-const TWO_COLUMN_SECONDARY_GROUPS = new Set([
-  "Little Love Bearer",
-  "Candle Bearer",
-  "Candle Sponsors",
-  "Veil Sponsors",
-  "Cord Sponsors",
-  "Ribbon Sponsors",
-])
 
 const SINGLE_COLUMN_SECTIONS = new Set([
   "Best Man",
@@ -366,13 +346,6 @@ const SINGLE_COLUMN_SECTIONS = new Set([
 function displayRoleCategory(category: string, members: EntourageMember[] = []) {
   return members[0]?.roleCategory?.trim() || category
 }
-
-const HONOR_ATTENDANT_BLOCK_CATEGORIES = [
-  "Man of Honor",
-  "Matron of Honor",
-  "Best Man",
-  "Maid of Honor",
-] as const
 
 function normalizeRoleCategory(category: string): string {
   const normalized = category.trim()
@@ -475,6 +448,828 @@ function readCachedParty(sponsorsPath: string) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// "The Aisle" — the card reads like walking into the church: a thread runs down
+// the middle, the groom's people sit on the left, the bride's on the right, and
+// every group of the party is a numbered chapter on the way to the altar.
+// ---------------------------------------------------------------------------
+
+const THREAD = "color-mix(in srgb, var(--color-welcome-heading) 42%, transparent)"
+const RUNNER =
+  "linear-gradient(to right, transparent, color-mix(in srgb, var(--color-motif-silver) 22%, transparent) 30%, color-mix(in srgb, var(--color-motif-silver) 22%, transparent) 70%, transparent)"
+const RUNNER_UNROLLED =
+  "linear-gradient(to right, transparent, color-mix(in srgb, var(--color-motif-silver) 48%, transparent) 28%, color-mix(in srgb, var(--color-motif-silver) 48%, transparent) 72%, transparent)"
+
+// Left lane | thread | right lane
+const AISLE_GRID = "grid grid-cols-[minmax(0,1fr)_1.75rem_minmax(0,1fr)] sm:grid-cols-[minmax(0,1fr)_3rem_minmax(0,1fr)]"
+
+const SECONDARY_SPONSOR_GROUPS = [
+  "Candle Sponsors",
+  "Candle Bearer",
+  "Veil Sponsors",
+  "Cord Sponsors",
+  "Ribbon Sponsors",
+] as const
+
+const LITTLE_SOLO_GROUPS = ["Little Tiny Groom", "Little Love Bearer", "Little Promise Bearer"] as const
+
+// A seat can be empty so rows stay aligned (e.g. a sponsor couple with one name)
+type Seat = EntourageMember | undefined
+
+interface Lane {
+  title?: string
+  members: Seat[]
+}
+
+type Block =
+  | { kind: "pair"; key: string; title?: string; caption?: string; left: Lane; right: Lane; showRole: boolean }
+  | { kind: "center"; key: string; title?: string; caption?: string; members: EntourageMember[]; showRole: boolean }
+
+interface Chapter {
+  key: string
+  title?: string
+  caption?: string
+  blocks: Block[]
+}
+
+interface BlockOptions {
+  title?: string
+  caption?: string
+  showRole?: boolean
+}
+
+function seated(seats: Seat[]): EntourageMember[] {
+  return seats.filter((seat): seat is EntourageMember => Boolean(seat))
+}
+
+function asSeat(name: string): Seat {
+  return name ? { name, roleCategory: "", roleTitle: "", email: "" } : undefined
+}
+
+// Two lanes across the aisle; when only one lane has names they move onto the aisle
+function pairBlock(
+  key: string,
+  left: Lane,
+  right: Lane,
+  { title, caption, showRole = true }: BlockOptions = {},
+): Block | null {
+  const leftMembers = seated(left.members)
+  const rightMembers = seated(right.members)
+  if (leftMembers.length === 0 && rightMembers.length === 0) return null
+  if (leftMembers.length === 0 || rightMembers.length === 0) {
+    const lane = leftMembers.length > 0 ? left : right
+    const members = leftMembers.length > 0 ? leftMembers : rightMembers
+    return { kind: "center", key, title: lane.title ?? title, caption, members, showRole }
+  }
+  return { kind: "pair", key, title, caption, left, right, showRole }
+}
+
+// One group: a single name stands on the aisle, more are split across both lanes
+function groupBlock(
+  key: string,
+  members: EntourageMember[],
+  { stack = false, ...options }: BlockOptions & { stack?: boolean } = {},
+): Block | null {
+  if (members.length === 0) return null
+  if (stack || members.length === 1) {
+    const { title, caption, showRole = true } = options
+    return { kind: "center", key, title, caption, members, showRole }
+  }
+  const half = Math.ceil(members.length / 2)
+  return pairBlock(key, { members: members.slice(0, half) }, { members: members.slice(half) }, options)
+}
+
+function buildChapters(
+  grouped: Record<string, EntourageMember[]>,
+  sponsors: PrincipalSponsor[],
+  label: (heading: string) => string,
+): Chapter[] {
+  const members = (category: string) => grouped[category] ?? []
+  const heading = (category: string) => label(displayRoleCategory(category, members(category)))
+  const lane = (category: string, title = category): Lane => ({ title: label(title), members: members(category) })
+  const chapters: Chapter[] = []
+  const chapter = (key: string, blocks: (Block | null)[], extra: Omit<Chapter, "key" | "blocks"> = {}) => {
+    const kept = blocks.filter((block): block is Block => block !== null)
+    if (kept.length > 0) chapters.push({ key, blocks: kept, ...extra })
+  }
+
+  chapter(
+    "parents",
+    [
+      pairBlock(
+        "parents",
+        { title: label("Parents of the Groom"), members: sortGroomParents(members("Parents of the Groom")) },
+        { title: label("Parents of the Bride"), members: sortBrideParents(members("Parents of the Bride")) },
+        { showRole: false },
+      ),
+    ],
+    { caption: "With the blessings of our Parents" },
+  )
+  chapter("officiant", [
+    groupBlock("officiant", members("OFFICIATING MINISTER"), {
+      title: label("OFFICIATING MINISTER"),
+      caption: "To solemnize the marriage and lead the couple in their covenant before God.",
+      showRole: false,
+      stack: true,
+    }),
+  ])
+  chapter("sponsors", [
+    pairBlock(
+      "principal",
+      { members: sponsors.map((sponsor) => asSeat(sponsor.malePrincipalSponsor)) },
+      { members: sponsors.map((sponsor) => asSeat(sponsor.femalePrincipalSponsor)) },
+      {
+        title: label("Principal Sponsors"),
+        caption: "To stand as principal witnesses in our exchange of vows",
+        showRole: false,
+      },
+    ),
+    groupBlock("peer", members("Peer Sponsors"), { title: label("Peer Sponsors"), showRole: false }),
+  ])
+  chapter("family", [pairBlock("family", lane("Family of the Groom"), lane("Family of the Bride"))])
+  chapter("honor", [
+    groupBlock("man-of-honor", members("Man of Honor"), { title: label("Man of Honor"), stack: true }),
+    pairBlock("best-man-maid", lane("Best Man"), lane("Maid of Honor")),
+    groupBlock("matron", members("Matron of Honor"), { title: label("Matron of Honor"), showRole: false, stack: true }),
+  ])
+  chapter("little-couple", [pairBlock("little-couple", lane("Little Groom"), lane("Little Bride"))])
+  for (const category of LITTLE_SOLO_GROUPS) {
+    chapter(category, [groupBlock(category, members(category), { title: heading(category) })])
+  }
+  chapter(
+    "secondary",
+    SECONDARY_SPONSOR_GROUPS.map((category) => groupBlock(category, members(category), { title: heading(category) })),
+    { title: label("Secondary Sponsors") },
+  )
+  chapter("bridal", [pairBlock("bridal", { members: members("Groomsmen") }, { members: members("Bridesmaids") })], {
+    title: label("Beloved Entourage"),
+  })
+  chapter("little-party", [pairBlock("little-party", lane("Little Groomsmen"), lane("Little Bridesmaids"))])
+  chapter("bearers", [
+    pairBlock("ring-coin", lane("Ring Bearer"), lane("Coin Bearer")),
+    groupBlock("bible", members("Bible Bearer"), { title: label("Bible Bearer"), stack: true }),
+  ])
+  chapter("flowers", [groupBlock("flowers", members("Flower Ladies"), { title: label("Flower Girls") })])
+
+  // Any category from the sheet that isn't in the ordered list
+  Object.keys(grouped)
+    .filter((category) => !ROLE_CATEGORY_ORDER.includes(category) && category !== "Other" && category !== "Peer Sponsors")
+    .forEach((category) => {
+      chapter(category, [
+        groupBlock(category, members(category), { title: heading(category), stack: SINGLE_COLUMN_SECTIONS.has(category) }),
+      ])
+    })
+
+  return chapters
+}
+
+const ROMAN_STEPS: [number, string][] = [
+  [10, "X"],
+  [9, "IX"],
+  [5, "V"],
+  [4, "IV"],
+  [1, "I"],
+]
+
+function toRoman(value: number) {
+  let rest = value
+  let out = ""
+  for (const [step, glyph] of ROMAN_STEPS) {
+    while (rest >= step) {
+      out += glyph
+      rest -= step
+    }
+  }
+  return out
+}
+
+// ── Scroll animation ────────────────────────────────────────────────────────
+// Every piece animates itself the first time it scrolls into view, so long lists
+// keep revealing row by row as the guest walks down the aisle. The whole section
+// sits in <MotionConfig reducedMotion="user">: with reduced motion only the fades run.
+
+const EASE = [0.22, 1, 0.36, 1] as const
+const IN_VIEW = { once: true, margin: "0px 0px -12% 0px" } as const
+
+const rise: Variants = {
+  hidden: { opacity: 0, y: 16, filter: "blur(5px)" },
+  show: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.8, ease: EASE } },
+}
+
+const stagger = (gap: number, delayChildren = 0): Variants => ({
+  hidden: {},
+  show: { transition: { staggerChildren: gap, delayChildren } },
+})
+
+// Names glide in toward the aisle from their own side
+const fromSide = (x: number, delay = 0): Variants => ({
+  hidden: { opacity: 0, x, filter: "blur(4px)" },
+  show: { opacity: 1, x: 0, filter: "blur(0px)", transition: { duration: 0.85, ease: EASE, delay } },
+})
+
+// Flourishes either side of a medallion grow outward from it
+const growOut = (origin: "left" | "right"): Variants => ({
+  hidden: { scaleX: 0, opacity: 0 },
+  show: { scaleX: 1, opacity: 1, transition: { duration: 0.9, ease: EASE, delay: origin === "left" ? 0.05 : 0 } },
+})
+const fromLeft = fromSide(-22)
+const fromRight = fromSide(22, 0.08)
+
+// Thread segments draw downward
+const drawDown: Variants = {
+  hidden: { scaleY: 0 },
+  show: { scaleY: 1, transition: { duration: 0.6, ease: EASE } },
+}
+
+const popIn = (delay = 0): Variants => ({
+  hidden: { opacity: 0, scale: 0.4 },
+  show: { opacity: 1, scale: 1, transition: { type: "spring", stiffness: 260, damping: 17, delay } },
+})
+
+const knotIn: Variants = {
+  hidden: { opacity: 0, scale: 0, rotate: 45 },
+  show: { opacity: 1, scale: 1, rotate: 45, transition: { type: "spring", stiffness: 300, damping: 16, delay: 0.2 } },
+}
+
+// The monogram is "inked" in from left to right
+const inkIn: Variants = {
+  hidden: { opacity: 0, scale: 0.92, clipPath: "inset(0% 100% 0% 0%)" },
+  show: {
+    opacity: 1,
+    scale: 1,
+    clipPath: "inset(0% 0% 0% 0%)",
+    transition: { duration: 1.4, ease: EASE, delay: 0.25 },
+  },
+}
+
+function AisleName({
+  member,
+  side,
+  showRole = true,
+  featured = false,
+}: {
+  member: EntourageMember
+  side: "left" | "right" | "center"
+  showRole?: boolean
+  featured?: boolean
+}) {
+  const textAlign = side === "left" ? "text-right" : side === "right" ? "text-left" : "text-center"
+  const displayName = toDisplayName(member.name)
+  const displayRole = member.roleTitle ? toDisplayName(member.roleTitle) : ""
+  return (
+    <div className={`min-w-0 max-w-full ${textAlign}`}>
+      <p
+        className="break-words"
+        style={{ ...nameStyle, ...(featured ? { fontSize: featuredNameSize } : {}), color: NAVY }}
+        title={displayName.replace(/\+/g, "†")}
+      >
+        {displayName ? <MixedFontText text={displayName} specialClassName="tracking-normal" /> : null}
+      </p>
+      {showRole && displayRole && (
+        <p
+          className={`${cinzel.className} mt-0.5 break-words font-semibold`}
+          style={{ ...roleTitleStyle, color: SCRIPT }}
+          title={displayRole}
+        >
+          <MixedFontText text={displayRole} specialClassName="tracking-normal" />
+        </p>
+      )}
+    </div>
+  )
+}
+
+// The middle column of a row: the thread, with a small knot beside each pair of names
+function AisleThread({ knot = false }: { knot?: boolean }) {
+  return (
+    <motion.div
+      className="relative flex items-center justify-center"
+      initial="hidden"
+      whileInView="show"
+      viewport={IN_VIEW}
+      aria-hidden
+    >
+      <motion.span
+        variants={drawDown}
+        className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 origin-top"
+        style={{ background: THREAD }}
+      />
+      {knot && (
+        <motion.span
+          variants={knotIn}
+          className="relative size-[5px] sm:size-1.5"
+          style={{ background: ACCENT, boxShadow: `0 0 0 3px ${PAPER}` }}
+        />
+      )}
+    </motion.div>
+  )
+}
+
+function BlockTitle({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return (
+    <motion.h3
+      variants={rise}
+      initial="hidden"
+      whileInView="show"
+      viewport={IN_VIEW}
+      className={`${SECTION_TITLE_CLASS} break-words ${className}`}
+      style={{ color: NAVY }}
+    >
+      {children}
+    </motion.h3>
+  )
+}
+
+function AisleCaption({ children }: { children: React.ReactNode }) {
+  return (
+    <motion.p
+      variants={rise}
+      initial="hidden"
+      whileInView="show"
+      viewport={IN_VIEW}
+      className="font-goudy-italic mx-auto mb-2 max-w-md px-4 text-center text-[0.74rem] leading-snug sm:mb-3 sm:text-sm md:text-[0.95rem]"
+      style={{ color: SCRIPT }}
+    >
+      {children}
+    </motion.p>
+  )
+}
+
+function LaneCell({ side, children }: { side: "left" | "right"; children: React.ReactNode }) {
+  return (
+    <motion.div
+      className="min-w-0 py-1 sm:py-1.5"
+      variants={side === "left" ? fromLeft : fromRight}
+      initial="hidden"
+      whileInView="show"
+      viewport={IN_VIEW}
+    >
+      {children}
+    </motion.div>
+  )
+}
+
+function AisleBlock({ block }: { block: Block }) {
+  return (
+    <div className="mt-4 first:mt-0 sm:mt-6">
+      {block.title && <BlockTitle className="mb-1 text-center sm:mb-2">{block.title}</BlockTitle>}
+      {block.caption && <AisleCaption>{block.caption}</AisleCaption>}
+      {block.kind === "pair" ? (
+        <div className={AISLE_GRID}>
+          {(block.left.title || block.right.title) && (
+            <>
+              <BlockTitle className="self-end pb-1 text-right sm:pb-2">{block.left.title}</BlockTitle>
+              <AisleThread />
+              <BlockTitle className="self-end pb-1 text-left sm:pb-2">{block.right.title}</BlockTitle>
+            </>
+          )}
+          {Array.from({ length: Math.max(block.left.members.length, block.right.members.length) }, (_, row) => {
+            const left = block.left.members[row]
+            const right = block.right.members[row]
+            return (
+              <React.Fragment key={`${block.key}-${row}`}>
+                <LaneCell side="left">
+                  {left && <AisleName member={left} side="left" showRole={block.showRole} />}
+                </LaneCell>
+                <AisleThread knot />
+                <LaneCell side="right">
+                  {right && <AisleName member={right} side="right" showRole={block.showRole} />}
+                </LaneCell>
+              </React.Fragment>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="mx-auto flex max-w-sm flex-col items-center gap-2 px-2 sm:gap-3">
+          {block.members.map((member, index) => (
+            <motion.div
+              key={`${block.key}-${index}-${member.name}`}
+              className="min-w-0 max-w-full"
+              variants={rise}
+              initial="hidden"
+              whileInView="show"
+              viewport={IN_VIEW}
+            >
+              <AisleName member={member} side="center" showRole={block.showRole} />
+            </motion.div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Numbered medallion on the thread that opens each chapter: the thread draws
+// down into it, the medallion springs open, then the thread carries on
+function ChapterMark({ numeral }: { numeral: string }) {
+  return (
+    <motion.div
+      className="flex flex-col items-center"
+      variants={stagger(0.14)}
+      initial="hidden"
+      whileInView="show"
+      viewport={IN_VIEW}
+      aria-hidden
+    >
+      <motion.span
+        variants={drawDown}
+        className="mb-1.5 h-6 w-px origin-top sm:mb-2 sm:h-9"
+        style={{ background: `linear-gradient(to bottom, transparent, ${THREAD})` }}
+      />
+      <div className="flex items-center gap-2 sm:gap-3">
+        <motion.span variants={growOut("right")} className="flex origin-right items-center gap-1.5">
+          <span className="size-1 rounded-full" style={{ background: THREAD }} />
+          <span className="h-px w-8 sm:w-16" style={{ background: `linear-gradient(to right, transparent, ${THREAD})` }} />
+        </motion.span>
+        <motion.span
+          variants={popIn()}
+          className="relative grid size-8 place-items-center rounded-full sm:size-10"
+          style={{
+            background: PAPER,
+            border: `1px solid ${THREAD}`,
+            boxShadow: `0 0 0 3px ${PAPER}, 0 0 0 4px ${HAIRLINE}`,
+          }}
+        >
+          <motion.span
+            className="absolute -inset-[7px] rounded-full border border-dashed sm:-inset-2"
+            style={{ borderColor: THREAD }}
+            animate={{ rotate: 360 }}
+            transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
+          />
+          <span
+            className={`${cinzel.className} text-[0.56rem] font-semibold leading-none tracking-[0.08em] sm:text-[0.7rem]`}
+            style={{ color: ACCENT }}
+          >
+            {numeral}
+          </span>
+        </motion.span>
+        <motion.span variants={growOut("left")} className="flex origin-left items-center gap-1.5">
+          <span className="h-px w-8 sm:w-16" style={{ background: `linear-gradient(to left, transparent, ${THREAD})` }} />
+          <span className="size-1 rounded-full" style={{ background: THREAD }} />
+        </motion.span>
+      </div>
+      <motion.span
+        variants={drawDown}
+        className="mt-1.5 h-2.5 w-px origin-top sm:mt-2 sm:h-4"
+        style={{ background: `linear-gradient(to bottom, ${THREAD}, transparent)` }}
+      />
+    </motion.div>
+  )
+}
+
+function AisleChapter({ chapter, numeral }: { chapter: Chapter; numeral: string }) {
+  return (
+    <section className="mt-3 sm:mt-5">
+      <ChapterMark numeral={numeral} />
+      {chapter.title && (
+        <motion.h3
+          variants={rise}
+          initial="hidden"
+          whileInView="show"
+          viewport={IN_VIEW}
+          className={`${aboveTheBeyond.className} mx-auto mb-1 w-fit max-w-full px-2 text-center leading-[1.05] sm:mb-2`}
+          style={{ color: ACCENT, fontSize: "clamp(1.15rem, min(5.6vw, 6cqi), 1.9rem)" }}
+        >
+          {chapter.title}
+        </motion.h3>
+      )}
+      {chapter.caption && <AisleCaption>{chapter.caption}</AisleCaption>}
+      {chapter.blocks.map((block) => (
+        <AisleBlock key={block.key} block={block} />
+      ))}
+    </section>
+  )
+}
+
+// Where the aisle ends: the thread fades into a small ring
+function AisleEnd() {
+  return (
+    <motion.div
+      className="mt-4 flex flex-col items-center sm:mt-6"
+      variants={stagger(0.2)}
+      initial="hidden"
+      whileInView="show"
+      viewport={IN_VIEW}
+      aria-hidden
+    >
+      <motion.span
+        variants={drawDown}
+        className="h-8 w-px origin-top sm:h-12"
+        style={{ background: `linear-gradient(to bottom, transparent, ${THREAD})` }}
+      />
+      <motion.span
+        variants={popIn()}
+        className="size-3 rounded-full sm:size-3.5"
+        style={{ border: `1px solid ${ACCENT}` }}
+      />
+    </motion.div>
+  )
+}
+
+// ── Card decoration ─────────────────────────────────────────────────────────
+
+function useElementSize<T extends HTMLElement>() {
+  const ref = useRef<T>(null)
+  const [size, setSize] = useState({ width: 0, height: 0 })
+  useEffect(() => {
+    const node = ref.current
+    if (!node) return
+    const observer = new ResizeObserver(([entry]) => {
+      const width = Math.round(entry.contentRect.width)
+      const height = Math.round(entry.contentRect.height)
+      setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }))
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+  return [ref, size] as const
+}
+
+// One side of the arch, from the keystone down to the middle of the base
+function archHalf(width: number, height: number, inset: number, side: "left" | "right") {
+  const cx = width / 2
+  const r = cx - inset
+  const x = side === "left" ? inset : width - inset
+  const sweep = side === "left" ? 0 : 1
+  return `M ${cx} ${inset} A ${r} ${r} 0 0 ${sweep} ${x} ${inset + r} V ${height - inset} H ${cx}`
+}
+
+// The arch's hairline draws itself from the keystone down both sides; a dotted
+// lace line follows just inside it
+function ArchFrame({ width, height }: { width: number; height: number }) {
+  if (!width || !height) return null
+  const inset = width < 420 ? 8 : width < 600 ? 14 : 20
+  const lace = inset + 6
+  return (
+    <svg
+      className="pointer-events-none absolute inset-0 z-30"
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      fill="none"
+      aria-hidden
+    >
+      {(["left", "right"] as const).map((side) => (
+        <motion.path
+          key={side}
+          d={archHalf(width, height, inset, side)}
+          stroke={HAIRLINE}
+          strokeWidth={1}
+          initial={{ pathLength: 0 }}
+          whileInView={{ pathLength: 1 }}
+          viewport={{ once: true }}
+          transition={{ duration: 2.8, ease: EASE }}
+        />
+      ))}
+      <motion.path
+        d={`${archHalf(width, height, lace, "left")} ${archHalf(width, height, lace, "right")}`}
+        stroke={ACCENT}
+        strokeOpacity={0.35}
+        strokeWidth={1.4}
+        strokeLinecap="round"
+        strokeDasharray="0 6"
+        initial={{ opacity: 0 }}
+        whileInView={{ opacity: 1 }}
+        viewport={{ once: true }}
+        transition={{ duration: 1.6, delay: 1.4 }}
+      />
+    </svg>
+  )
+}
+
+const PAPER_GRAIN =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E\")"
+
+// Light falling through the church door: a soft glow and slow-turning rays at the top of the arch
+function DoorwayLight() {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-0 aspect-square overflow-hidden" aria-hidden>
+      <motion.div
+        className="absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(ellipse 62% 42% at 50% 0%, rgb(255 255 255 / 95%), color-mix(in srgb, var(--color-motif-silver) 30%, transparent) 45%, transparent 75%)",
+        }}
+        animate={{ opacity: [0.65, 1, 0.65] }}
+        transition={{ duration: 7, repeat: Infinity, ease: "easeInOut" }}
+      />
+      <motion.div
+        className="absolute -inset-x-1/4 top-0 h-full origin-top"
+        style={{
+          background:
+            "repeating-conic-gradient(from 180deg at 50% 0%, color-mix(in srgb, var(--color-motif-silver) 38%, transparent) 0deg 3deg, transparent 3deg 11deg)",
+          maskImage: "radial-gradient(ellipse 55% 70% at 50% 0%, black, transparent 72%)",
+          WebkitMaskImage: "radial-gradient(ellipse 55% 70% at 50% 0%, black, transparent 72%)",
+        }}
+        animate={{ rotate: [-2.5, 2.5, -2.5] }}
+        transition={{ duration: 16, repeat: Infinity, ease: "easeInOut" }}
+      />
+    </div>
+  )
+}
+
+const PETAL_FILLS = [
+  "color-mix(in srgb, var(--color-motif-silver) 90%, white)",
+  "color-mix(in srgb, var(--color-welcome-heading) 45%, var(--color-motif-silver))",
+  "var(--color-motif-cream)",
+]
+
+// Petals drift down the aisle the whole length of the card (hidden with reduced motion)
+function PetalShower({ height }: { height: number }) {
+  const reduceMotion = useReducedMotion()
+  const petals = useMemo(() => {
+    const count = Math.min(18, Math.max(6, Math.round(height / 320)))
+    return Array.from({ length: count }, (_, i) => {
+      // Fixed pseudo-random spread so the layout is stable between renders
+      const seed = (i * 7919) % 101
+      const duration = Math.max(14, height / 85) * (0.85 + (seed % 7) * 0.05)
+      return {
+        left: `${18 + ((seed * 37) % 64)}%`,
+        size: 7 + (seed % 6),
+        drift: 14 + (seed % 22),
+        spin: (seed % 2 ? 1 : -1) * (180 + (seed % 5) * 60),
+        duration,
+        delay: -(duration * i) / count,
+        fill: PETAL_FILLS[i % PETAL_FILLS.length],
+      }
+    })
+  }, [height])
+  if (reduceMotion || height < 200) return null
+  return (
+    <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden" aria-hidden>
+      {petals.map((petal, i) => (
+        <motion.svg
+          key={i}
+          viewBox="0 0 12 16"
+          className="absolute -top-6"
+          style={{ left: petal.left, width: petal.size, height: petal.size * 1.35, opacity: 0.75 }}
+          animate={{
+            y: [0, height + 40],
+            x: [0, petal.drift, -petal.drift * 0.6, petal.drift * 0.4, 0],
+            rotate: [0, petal.spin],
+          }}
+          transition={{ duration: petal.duration, delay: petal.delay, repeat: Infinity, ease: "linear" }}
+        >
+          <path d="M6 0C10.5 3.5 11 10 6 16C1 10 1.5 3.5 6 0Z" fill={petal.fill} />
+          <path d="M6 2.5V13" stroke="rgb(255 255 255 / 55%)" strokeWidth="0.6" />
+        </motion.svg>
+      ))}
+    </div>
+  )
+}
+
+// Garland on the peak of the arch: blooms in, then sways a little
+function ArchGarland({ src }: { src: string }) {
+  if (!src) return null
+  return (
+    <div className="pointer-events-none absolute inset-x-0 -top-5 z-40 flex justify-center sm:-top-8" aria-hidden>
+      <motion.div
+        initial={{ opacity: 0, scale: 0.55, y: -12 }}
+        whileInView={{ opacity: 1, scale: 1, y: 0 }}
+        viewport={{ once: true }}
+        transition={{ type: "spring", stiffness: 120, damping: 14, delay: 0.5 }}
+      >
+        <motion.div
+          className="origin-bottom"
+          animate={{ rotate: [-1.4, 1.4, -1.4] }}
+          transition={{ duration: 6, repeat: Infinity, ease: "easeInOut" }}
+        >
+          <DecoImg src={src} className="block h-auto w-32 select-none drop-shadow-sm sm:w-48 md:w-56" />
+        </motion.div>
+      </motion.div>
+    </div>
+  )
+}
+
+// Bouquets resting on the bottom corners of the card
+function CornerBouquet({ src, side }: { src: string; side: "left" | "right" }) {
+  if (!src) return null
+  const isLeft = side === "left"
+  return (
+    <motion.div
+      className={`pointer-events-none absolute -bottom-6 z-40 w-28 sm:-bottom-9 sm:w-44 md:w-52 ${
+        isLeft ? "-left-3 origin-bottom-left sm:-left-6" : "-right-3 origin-bottom-right sm:-right-6"
+      }`}
+      initial={{ opacity: 0, scale: 0.6, rotate: isLeft ? -10 : 10 }}
+      whileInView={{ opacity: 1, scale: 1, rotate: 0 }}
+      viewport={{ once: true, amount: 0.4 }}
+      transition={{ type: "spring", stiffness: 90, damping: 14 }}
+      aria-hidden
+    >
+      <motion.div
+        className={isLeft ? "origin-bottom-left" : "origin-bottom-right"}
+        animate={{ rotate: isLeft ? [0, 1.6, 0] : [0, -1.6, 0] }}
+        transition={{ duration: 7, repeat: Infinity, ease: "easeInOut", delay: isLeft ? 0 : 1.2 }}
+      >
+        <DecoImg src={src} className={`block h-auto w-full select-none drop-shadow-md ${isLeft ? "" : "-scale-x-100"}`} />
+      </motion.div>
+    </motion.div>
+  )
+}
+
+// Scalloped lace hem under the card
+function LaceHem() {
+  return (
+    <div
+      className="relative z-20 -mt-px h-[9px]"
+      style={{
+        background: `radial-gradient(circle at 50% 0, ${PAPER} 6.5px, transparent 7px) center top / 14px 9px repeat-x`,
+        filter: "drop-shadow(0 5px 5px color-mix(in srgb, var(--color-welcome-navy) 14%, transparent))",
+      }}
+      aria-hidden
+    />
+  )
+}
+
+// A row of lace eyelets just inside the bottom edge
+function LaceEyelets() {
+  return (
+    <div
+      className="pointer-events-none absolute inset-x-5 bottom-3 z-30 h-[6px] sm:inset-x-8 sm:bottom-5"
+      style={{ background: `radial-gradient(circle, ${HAIRLINE} 1.3px, transparent 1.8px) center / 14px 6px repeat-x` }}
+      aria-hidden
+    />
+  )
+}
+
+// The couple's monogram, painted in the ink color through the image's alpha
+function Monogram({ src, label, fallback }: { src: string; label: string; fallback: React.ReactNode }) {
+  const reduceMotion = useReducedMotion()
+  return (
+    <motion.div variants={inkIn} className="relative">
+      {src ? (
+        // A silvery glint passes through the ink every few seconds
+        <motion.span
+          role="img"
+          aria-label={label}
+          className="relative block aspect-[8/5] w-[4.75rem] min-[400px]:w-24 sm:w-32 md:w-36"
+          animate={reduceMotion ? undefined : { backgroundPosition: ["100% 0%", "0% 0%"] }}
+          transition={{ duration: 2.4, ease: "easeInOut", repeat: Infinity, repeatDelay: 5, delay: 2 }}
+          style={{
+            backgroundImage: `linear-gradient(105deg, ${NAVY} 40%, color-mix(in srgb, ${NAVY} 30%, white) 50%, ${NAVY} 60%)`,
+            backgroundSize: "300% 100%",
+            backgroundPosition: "100% 0%",
+            WebkitMaskImage: `url("${src}")`,
+            maskImage: `url("${src}")`,
+            WebkitMaskSize: "contain",
+            maskSize: "contain",
+            WebkitMaskRepeat: "no-repeat",
+            maskRepeat: "no-repeat",
+            WebkitMaskPosition: "center",
+            maskPosition: "center",
+          }}
+        />
+      ) : (
+        <span className="relative">{fallback}</span>
+      )}
+    </motion.div>
+  )
+}
+
+function CoupleAtTheAltar({
+  heading,
+  kicker,
+  line,
+  monogram,
+  groom,
+  bride,
+}: {
+  heading: string
+  kicker: string
+  line: string
+  monogram: string
+  groom: EntourageMember
+  bride: EntourageMember
+}) {
+  const initial = (name: string) => name.trim().charAt(0).toUpperCase()
+  return (
+    <motion.div className="text-center" variants={stagger(0.12)} initial="hidden" whileInView="show" viewport={IN_VIEW}>
+      <motion.div variants={rise}>
+        <CouplePromiseMark kicker={kicker} line={line} />
+      </motion.div>
+      <motion.h3 variants={rise} className={`${SECTION_TITLE_CLASS} mb-2 sm:mb-3`} style={{ color: NAVY }}>
+        {heading}
+      </motion.h3>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-2 sm:gap-x-5">
+        <motion.div variants={fromSide(-30)} className="min-w-0">
+          <AisleName member={groom} side="left" featured />
+        </motion.div>
+        <Monogram
+          src={monogram}
+          label={`${toDisplayName(groom.name)} and ${toDisplayName(bride.name)} monogram`}
+          fallback={
+            <span className={`${theSeasons.className} text-2xl sm:text-4xl`} style={{ color: NAVY }}>
+              {initial(groom.name)} &amp; {initial(bride.name)}
+            </span>
+          }
+        />
+        <motion.div variants={fromSide(30)} className="min-w-0">
+          <AisleName member={bride} side="right" featured />
+        </motion.div>
+      </div>
+    </motion.div>
+  )
+}
+
 export function Entourage({ sponsorsList }: { sponsorsList?: SponsorsList } = {}) {
   const sponsorsPath = sponsorsUrl(sponsorsList)
   const siteConfig = useSiteConfig()
@@ -487,8 +1282,12 @@ export function Entourage({ sponsorsList }: { sponsorsList?: SponsorsList } = {}
   const [isLoading, setIsLoading] = useState(true)
   const [isRetrying, setIsRetrying] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [isVisible, setIsVisible] = useState(false)
-  const sectionRef = useRef<HTMLDivElement>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
+  const [archRef, archSize] = useElementSize<HTMLDivElement>()
+  const reduceMotion = useReducedMotion()
+  // The runner unrolls down the aisle as the card scrolls past
+  const { scrollYProgress } = useScroll({ target: cardRef, offset: ["start 0.8", "end 0.9"] })
+  const runnerUnroll = useSpring(scrollYProgress, { stiffness: 110, damping: 28, mass: 0.4 })
 
   const loadParty = async (signal?: AbortSignal, { reload = false } = {}) => {
     const cached = readCachedParty(sponsorsPath)
@@ -553,28 +1352,6 @@ export function Entourage({ sponsorsList }: { sponsorsList?: SponsorsList } = {}
     }
   }, [])
 
-  // Intersection Observer for scroll animations
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          setIsVisible(true)
-        }
-      },
-      { threshold: 0.1 }
-    )
-
-    if (sectionRef.current) {
-      observer.observe(sectionRef.current)
-    }
-
-    return () => {
-      if (sectionRef.current) {
-        observer.unobserve(sectionRef.current)
-      }
-    }
-  }, [])
-
   // Group entourage by role category
   const grouped = useMemo(() => {
     const grouped: Record<string, EntourageMember[]> = {}
@@ -594,174 +1371,17 @@ export function Entourage({ sponsorsList }: { sponsorsList?: SponsorsList } = {}
     return grouped
   }, [entourage])
 
-  const hasParents =
-    (grouped["Parents of the Groom"]?.length ?? 0) > 0 || (grouped["Parents of the Bride"]?.length ?? 0) > 0
-
-  // Helper component for elegant section titles (category labels)
-  const SectionTitle = ({
-    children,
-    align = "center",
-    className = "",
-  }: {
-    children: React.ReactNode
-    align?: "left" | "center" | "right"
-    className?: string
-  }) => {
-    const textAlign =
-      align === "right" ? "text-right" : align === "left" ? "text-left" : "text-center"
-    return (
-      <h3
-        className={`relative ${SECTION_TITLE_CLASS} mb-1 sm:mb-2 md:mb-2.5 ${textAlign} ${className} transition-all duration-300`}
-        style={{ color: NAVY }}
-      >
-        {typeof children === "string" ? content.headingLabels[children] ?? children : children}
-      </h3>
-    )
-  }
-
-  // Short italic line under a heading (e.g. what the role means)
-  const SectionCaption = ({ children }: { children: React.ReactNode }) => (
-    <p
-      className="font-goudy-italic mx-auto -mt-0.5 mb-2 max-w-md px-4 text-center text-[0.74rem] leading-snug sm:mb-3 sm:text-sm md:text-[0.95rem]"
-      style={{ color: SCRIPT }}
-    >
-      {children}
-    </p>
+  // Headings can be renamed in content/site.ts → entourage.headingLabels
+  const headingLabels = content.headingLabels
+  const chapters = useMemo(
+    () => buildChapters(grouped, sponsors, (heading) => headingLabels[heading] ?? heading),
+    [grouped, sponsors, headingLabels],
   )
-
-  const NameItem = ({
-    member,
-    align = "center",
-    showRole = true,
-    featured = false,
-  }: {
-    member: EntourageMember
-    align?: "left" | "center" | "right"
-    showRole?: boolean
-    featured?: boolean
-  }) => {
-    const containerAlign =
-      align === "right" ? "items-end" : align === "left" ? "items-start" : "items-center"
-    const textAlign =
-      align === "right" ? "text-right" : align === "left" ? "text-left" : "text-center"
-    const displayName = toDisplayName(member.name)
-    const displayRole = member.roleTitle ? toDisplayName(member.roleTitle) : ""
-    return (
-      <div
-        className={`relative flex flex-col ${containerAlign} justify-center py-0.5 sm:py-1.5 min-w-0 w-full max-w-full group/item transition-all duration-300`}
-      >
-        <div
-          className="absolute inset-0 opacity-0 group-hover/item:opacity-100 transition-opacity duration-300 rounded-md"
-          style={{ background: "linear-gradient(to right, transparent, color-mix(in srgb, var(--color-motif-silver) 70%, transparent), transparent)" }}
-        />
-        <p
-          className={`relative ${textAlign} transition-all duration-300 max-w-full break-words`}
-          style={{
-            ...nameStyle,
-            ...(featured ? { fontSize: featuredNameSize } : {}),
-            color: NAVY,
-          }}
-          title={displayName.replace(/\+/g, "†")}
-        >
-          {displayName ? (
-            <MixedFontText
-              text={displayName}
-              specialClassName="tracking-normal"
-            />
-          ) : null}
-        </p>
-        {showRole && displayRole && (
-          <p
-            className={`${cinzel.className} relative mt-0.5 font-semibold ${textAlign} max-w-full break-words`}
-            style={{ ...roleTitleStyle, color: SCRIPT }}
-            title={displayRole}
-          >
-            <MixedFontText
-              text={displayRole}
-              specialClassName="tracking-normal"
-            />
-          </p>
-        )}
-      </div>
-    )
-  }
-
-  // Rows of left | right names (right-aligned left column, left-aligned right column)
-  const renderPairRows = (keyPrefix: string, left: EntourageMember[], right: EntourageMember[]) => {
-    const maxLen = Math.max(left.length, right.length)
-    const rows = []
-    for (let i = 0; i < maxLen; i++) {
-      const l = left[i]
-      const r = right[i]
-      rows.push(
-        <React.Fragment key={`${keyPrefix}-row-${i}`}>
-          <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-            {l ? <NameItem member={l} align="right" /> : <div className="py-0.5" />}
-          </div>
-          <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-            {r ? <NameItem member={r} align="left" /> : <div className="py-0.5" />}
-          </div>
-        </React.Fragment>
-      )
-    }
-    return rows
-  }
-
-  const TwoColumnLayout = ({
-    children,
-    leftTitle,
-    rightTitle,
-    singleTitle,
-    caption,
-    centerContent = false,
-  }: {
-    children: React.ReactNode
-    leftTitle?: string
-    rightTitle?: string
-    singleTitle?: string
-    caption?: string
-    centerContent?: boolean
-  }) => {
-    if (singleTitle) {
-      return (
-        <div className="mb-1.5 sm:mb-2.5 md:mb-3">
-          <SectionTitle>{singleTitle}</SectionTitle>
-          {caption && <SectionCaption>{caption}</SectionCaption>}
-          <div
-            className={`grid grid-cols-2 gap-x-1.5 sm:gap-x-3 md:gap-x-5 gap-y-1 sm:gap-y-1.5 ${centerContent ? "max-w-3xl mx-auto" : ""}`}
-          >
-            {children}
-          </div>
-        </div>
-      )
-    }
-
-    return (
-      <div className="mb-1.5 sm:mb-2.5 md:mb-3">
-        <div className="grid grid-cols-2 gap-x-1.5 sm:gap-x-3 md:gap-x-5 mb-2 sm:mb-2.5 md:mb-3">
-          {leftTitle && (
-            <SectionTitle align="right" className="pr-0.5 sm:pr-1">
-              {leftTitle}
-            </SectionTitle>
-          )}
-          {rightTitle && (
-            <SectionTitle align="left" className="pl-0.5 sm:pl-1">
-              {rightTitle}
-            </SectionTitle>
-          )}
-        </div>
-        <div
-          className={`grid grid-cols-2 gap-x-1.5 sm:gap-x-3 md:gap-x-5 gap-y-1 sm:gap-y-1.5 ${centerContent ? "max-w-3xl mx-auto" : ""}`}
-        >
-          {children}
-        </div>
-      </div>
-    )
-  }
+  const label = (heading: string) => headingLabels[heading] ?? heading
 
   return (
+    <MotionConfig reducedMotion="user">
     <div
-      ref={sectionRef}
       className={`${theSeasons.variable} ${aboveTheBeyond.variable} relative w-full overflow-hidden`}
       style={{ background: sectionBg }}
     >
@@ -777,56 +1397,94 @@ export function Entourage({ sponsorsList }: { sponsorsList?: SponsorsList } = {}
         {content.showFrame && <div className="deco-frame" aria-hidden="true" />}
         <DecoCorners decos={decos} />
 
-      <div className={`relative z-20 mx-auto mb-5 max-w-5xl px-3 text-center @container/entourage sm:mb-10 sm:px-4 md:mb-12 transition-all duration-1000 ${isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-10"}`}>
-        <DecoImg
-          src={decos.headerOrnament}
-          className="mx-auto mb-2 block h-auto w-20 select-none sm:mb-4 sm:w-36 md:w-44"
-        />
-        <div className="mx-auto mb-2.5 sm:mb-5 md:mb-6">
+      <motion.div
+        className="relative z-20 mx-auto mb-5 max-w-5xl px-3 text-center @container/entourage sm:mb-10 sm:px-4 md:mb-12"
+        variants={stagger(0.12)}
+        initial="hidden"
+        whileInView="show"
+        viewport={{ once: true, amount: 0.3 }}
+      >
+        <motion.div variants={popIn()}>
+          <DecoImg
+            src={decos.headerOrnament}
+            className="mx-auto mb-2 block h-auto w-20 select-none sm:mb-4 sm:w-36 md:w-44"
+          />
+        </motion.div>
+        <motion.div variants={rise} className="mx-auto mb-2.5 sm:mb-5 md:mb-6">
           <OutsideDivider />
-        </div>
-        <p
+        </motion.div>
+        <motion.p
+          variants={rise}
           className={`${cinzel.className} mx-auto max-w-[20rem] px-2 text-[0.6875rem] font-semibold leading-snug tracking-[0.12em] min-[400px]:max-w-none min-[400px]:text-[0.75rem] min-[400px]:tracking-[0.16em] sm:text-[0.8125rem] sm:tracking-[0.2em] md:text-sm md:tracking-[0.22em]`}
           style={onBg}
         >
           {content.eyebrow}
-        </p>
-        <div className="mx-auto mt-2 sm:mt-4 md:mt-5">
+        </motion.p>
+        <motion.div variants={rise} className="mx-auto mt-2 sm:mt-4 md:mt-5">
           <EntourageTitle title={content.title} subtitle={content.subtitle} />
-        </div>
+        </motion.div>
 
-        <p
+        <motion.p
+          variants={rise}
           className="font-goudy-italic mx-auto mt-2.5 max-w-xl px-2 text-[0.78rem] leading-snug sm:mt-5 sm:text-base sm:leading-relaxed md:mt-6"
           style={{ ...onBg, fontWeight: 600 }}
         >
           {content.description}
-        </p>
+        </motion.p>
 
         <div className="mt-3 flex items-center justify-center sm:mt-5">
-          <span
+          <motion.span
+            variants={{ hidden: { scaleX: 0 }, show: { scaleX: 1, transition: { duration: 0.9, ease: EASE } } }}
             className="h-px w-16 sm:w-24 md:w-32"
             style={onBgLineStyle}
           />
         </div>
-      </div>
+      </motion.div>
 
-      <div
-        className={`relative z-20 mx-auto max-w-3xl px-2.5 pb-1 sm:max-w-4xl sm:px-6 md:px-8 @container/entourage-card transition-all duration-1000 delay-300 ${
-          isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-10"
-        }`}
+      <motion.div
+        className="relative z-20 mx-auto max-w-3xl px-2.5 pb-1 sm:max-w-4xl sm:px-6 md:px-8 @container/entourage-card"
+        initial={{ opacity: 0, y: 40 }}
+        whileInView={{ opacity: 1, y: 0 }}
+        viewport={{ once: true, amount: 0.05 }}
+        transition={{ duration: 1, ease: EASE }}
       >
-        <div className="relative">
+        <div ref={cardRef} className="relative">
+          <ArchGarland src={decos.archGarland} />
           <div
+            ref={archRef}
             className="relative z-20 overflow-hidden rounded-t-full"
             style={cardStyle}
           >
+            {/* Paper grain, light through the doorway, the self-drawing arch frame */}
             <div
-              className="pointer-events-none absolute inset-2 z-30 rounded-t-full sm:inset-4 md:inset-5"
-              style={{ border: `1px solid ${HAIRLINE}` }}
+              className="pointer-events-none absolute inset-0 z-0 opacity-[0.07] mix-blend-multiply"
+              style={{ backgroundImage: PAPER_GRAIN }}
               aria-hidden
             />
+            <DoorwayLight />
+            <ArchFrame width={archSize.width} height={archSize.height} />
+            <LaceEyelets />
+            {/* Soft runner down the middle of the card — the aisle — and a deeper
+                runner that unrolls over it as you scroll */}
+            <div
+              className="pointer-events-none absolute inset-y-0 left-1/2 z-10 w-16 -translate-x-1/2 sm:w-28"
+              aria-hidden
+            >
+              <div className="absolute inset-0" style={{ background: RUNNER }} />
+              <motion.div
+                className="absolute inset-0 origin-top"
+                style={{
+                  background: RUNNER_UNROLLED,
+                  maskImage: "linear-gradient(to bottom, black 85%, transparent)",
+                  WebkitMaskImage: "linear-gradient(to bottom, black 85%, transparent)",
+                  scaleY: reduceMotion ? 1 : runnerUnroll,
+                }}
+              />
+            </div>
 
-            <div className="relative z-20 px-3 pb-7 pt-[18%] sm:px-8 sm:pt-[22%] sm:pb-12 md:px-12 md:pb-14 lg:px-14">
+            {!isLoading && !error && <PetalShower height={archSize.height} />}
+
+            <div className="relative z-20 px-3 pb-24 pt-[18%] sm:px-8 sm:pt-[22%] sm:pb-32 md:px-12 md:pb-36 lg:px-14">
             {isLoading ? (
               <div className="flex items-center justify-center py-24 sm:py-28 md:py-32">
                 <div className="text-center">
@@ -852,845 +1510,40 @@ export function Entourage({ sponsorsList }: { sponsorsList?: SponsorsList } = {}
               </div>
             ) : (
             <>
-              <CouplePromiseMark kicker={content.coupleKicker} line={content.coupleLine} />
-              <div className="mb-1.5 sm:mb-2.5 md:mb-3">
-                <SectionTitle>{content.coupleHeading}</SectionTitle>
-                <div className="grid grid-cols-2 gap-x-1.5 sm:gap-x-3 md:gap-x-5 gap-y-1 sm:gap-y-1.5">
-                  <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0">
-                    <NameItem
-                      member={{
-                        name: groomName,
-                        roleCategory: "The Couple",
-                        roleTitle: content.groomRole,
-                        email: "",
-                      }}
-                      align="right"
-                      featured
-                    />
-                  </div>
-                  <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0">
-                    <NameItem
-                      member={{
-                        name: brideName,
-                        roleCategory: "The Couple",
-                        roleTitle: content.brideRole,
-                        email: "",
-                      }}
-                      align="left"
-                      featured
-                    />
-                  </div>
-                </div>
-              </div>
-              {ROLE_CATEGORY_ORDER.map((category, categoryIndex) => {
-                const members = grouped[category] || []
-                const bridalPartyHasMembers =
-                  (grouped["Groomsmen"]?.length ?? 0) > 0 ||
-                  (grouped["Bridesmaids"]?.length ?? 0) > 0
-
-                if (category === "The Couple") return null
-                
-                const peerSponsorCount = grouped["Peer Sponsors"]?.length ?? 0
-                const officiatingCount = grouped["OFFICIATING MINISTER"]?.length ?? 0
-                const parentsBlockNeeded =
-                  category === "Parents of the Groom" &&
-                  (sponsors.length > 0 ||
-                    peerSponsorCount > 0 ||
-                    officiatingCount > 0 ||
-                    hasParents)
-
-                if (
-                  members.length === 0 &&
-                  !(category === "Groomsmen" && bridalPartyHasMembers) &&
-                  !parentsBlockNeeded
-                ) {
-                  return null
-                }
-                if (category === "Peer Sponsors") return null
-
-                const parentsAnchorActive =
-                  hasParents ||
-                  sponsors.length > 0 ||
-                  peerSponsorCount > 0 ||
-                  officiatingCount > 0
-
-                // Render OFFICIATING MINISTER in the anchor block when that block runs
-                if (category === "OFFICIATING MINISTER" && parentsAnchorActive) return null
-
-                // Special handling for Parents sections - combine into single two-column layout
-                if (category === "Parents of the Bride" || category === "Parents of the Groom") {
-                  const parentsBride = grouped["Parents of the Bride"] || []
-                  const parentsGroom = grouped["Parents of the Groom"] || []
-                  const hasGroomParents = parentsGroom.length > 0
-                  const hasBrideParents = parentsBride.length > 0
-
-                  if (category === "Parents of the Groom") {
-                    return (
-                      <div key="Parents">
-                        {categoryIndex > 0 && (
-                          <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                            <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                          </div>
-                        )}
-                        {hasParents && (
-                          <SectionCaption>With the blessings of our Parents</SectionCaption>
-                        )}
-                        {hasGroomParents && hasBrideParents && (
-                          <TwoColumnLayout leftTitle="Parents of the Groom" rightTitle="Parents of the Bride">
-                            {(() => {
-                              const leftArr = sortGroomParents(parentsGroom)
-                              const rightArr = sortBrideParents(parentsBride)
-                              const maxLen = Math.max(leftArr.length, rightArr.length)
-                              const rows = []
-                              for (let i = 0; i < maxLen; i++) {
-                                const left = leftArr[i]
-                                const right = rightArr[i]
-                                rows.push(
-                                  <React.Fragment key={`parents-row-${i}`}>
-                                    <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                      {left ? (
-                                        <NameItem member={left} align="right" showRole={false} />
-                                      ) : (
-                                        <div className="py-0.5" />
-                                      )}
-                                    </div>
-                                    <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                      {right ? (
-                                        <NameItem member={right} align="left" showRole={false} />
-                                      ) : (
-                                        <div className="py-0.5" />
-                                      )}
-                                    </div>
-                                  </React.Fragment>
-                                )
-                              }
-                              return rows
-                            })()}
-                          </TwoColumnLayout>
-                        )}
-                        {hasGroomParents && !hasBrideParents && (
-                          <TwoColumnLayout singleTitle="Parents of the Groom" centerContent={true}>
-                            {sortGroomParents(parentsGroom).map((member, idx) => (
-                              <div
-                                key={`parent-groom-only-${idx}-${member.name}`}
-                                className="col-span-2 flex justify-center min-w-0 overflow-hidden px-0.5 sm:px-1"
-                              >
-                                <NameItem member={member} align="center" showRole={false} />
-                              </div>
-                            ))}
-                          </TwoColumnLayout>
-                        )}
-                        {!hasGroomParents && hasBrideParents && (
-                          <TwoColumnLayout singleTitle="Parents of the Bride" centerContent={true}>
-                            {sortBrideParents(parentsBride).map((member, idx) => (
-                              <div
-                                key={`parent-bride-only-${idx}-${member.name}`}
-                                className="col-span-2 flex justify-center min-w-0 overflow-hidden px-0.5 sm:px-1"
-                              >
-                                <NameItem member={member} align="center" showRole={false} />
-                              </div>
-                            ))}
-                          </TwoColumnLayout>
-                        )}
-
-                        {/* Officiating Minister section - displayed above Principal Sponsors */}
-                        {(() => {
-                          const officiating = grouped["OFFICIATING MINISTER"] || []
-                          if (officiating.length === 0) return null
-                          return (
-                            <div key="OfficiatingMinisterBeforeSponsors" className="mt-3 sm:mt-5 md:mt-6">
-                              <TwoColumnLayout
-                                singleTitle="OFFICIATING MINISTER"
-                                caption="To solemnize the marriage and lead the couple in their covenant before God."
-                                centerContent={true}
-                              >
-                                {officiating.map((member, idx) => (
-                                  <div
-                                    key={`officiating-${idx}-${member.name}`}
-                                    className="col-span-2 flex justify-center min-w-0 overflow-hidden px-0.5 sm:px-1"
-                                  >
-                                    <NameItem member={member} align="center" showRole={false} />
-                                  </div>
-                                ))}
-                              </TwoColumnLayout>
-                            </div>
-                          )
-                        })()}
-
-                        {sponsors.length > 0 && (
-                          <div key="SponsorsAfterParents">
-                            <div className="flex justify-center py-1 sm:py-2 md:py-2.5 mb-1.5 sm:mb-2.5 md:mb-3" />
-                            <TwoColumnLayout
-                              singleTitle="Principal Sponsors"
-                              caption="To stand as principal witnesses in our exchange of vows"
-                              centerContent={true}
-                            >
-                              {sponsors.map((sponsor, idx) => (
-                                <React.Fragment key={`sponsor-row-${idx}`}>
-                                  <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                    {sponsor.malePrincipalSponsor ? (
-                                      <NameItem
-                                        member={{
-                                          name: sponsor.malePrincipalSponsor,
-                                          roleCategory: "",
-                                          roleTitle: "",
-                                          email: "",
-                                        }}
-                                        align="right"
-                                        showRole={false}
-                                      />
-                                    ) : (
-                                      <div className="py-0.5 sm:py-1 md:py-1.5" />
-                                    )}
-                                  </div>
-                                  <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                    {sponsor.femalePrincipalSponsor ? (
-                                      <NameItem
-                                        member={{
-                                          name: sponsor.femalePrincipalSponsor,
-                                          roleCategory: "",
-                                          roleTitle: "",
-                                          email: "",
-                                        }}
-                                        align="left"
-                                        showRole={false}
-                                      />
-                                    ) : (
-                                      <div className="py-0.5 sm:py-1 md:py-1.5" />
-                                    )}
-                                  </div>
-                                </React.Fragment>
-                              ))}
-                            </TwoColumnLayout>
-                          </div>
-                        )}
-
-                        {(() => {
-                          const peerSponsors = grouped["Peer Sponsors"] || []
-                          if (peerSponsors.length === 0) return null
-                          return (
-                            <div key="PeerSponsorsAfterPrincipal">
-                              <div className="flex justify-center py-1 sm:py-2 md:py-2.5 mb-1.5 sm:mb-2.5 md:mb-3" />
-                              <TwoColumnLayout singleTitle="Peer Sponsors" centerContent={true}>
-                                {peerSponsors.length === 2 ? (
-                                  <>
-                                    <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                      <NameItem member={peerSponsors[0]} align="right" showRole={false} />
-                                    </div>
-                                    <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                      <NameItem member={peerSponsors[1]} align="left" showRole={false} />
-                                    </div>
-                                  </>
-                                ) : peerSponsors.length <= 2 ? (
-                                  <div className="col-span-full">
-                                    <div className="max-w-sm mx-auto flex flex-col items-center gap-0.5 sm:gap-1 md:gap-1">
-                                      {peerSponsors.map((member, idx) => (
-                                        <NameItem
-                                          key={`peer-sponsor-${idx}-${member.name}`}
-                                          member={member}
-                                          align="center"
-                                          showRole={false}
-                                        />
-                                      ))}
-                                    </div>
-                                  </div>
-                                ) : (
-                                  (() => {
-                                    const half = Math.ceil(peerSponsors.length / 2)
-                                    const left = peerSponsors.slice(0, half)
-                                    const right = peerSponsors.slice(half)
-                                    const maxLen = Math.max(left.length, right.length)
-                                    const rows = []
-                                    for (let i = 0; i < maxLen; i++) {
-                                      const l = left[i]
-                                      const r = right[i]
-                                      rows.push(
-                                        <React.Fragment key={`peer-sponsor-row-${i}`}>
-                                          <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                            {l ? (
-                                              <NameItem member={l} align="right" showRole={false} />
-                                            ) : (
-                                              <div className="py-0.5 sm:py-1 md:py-1.5" />
-                                            )}
-                                          </div>
-                                          <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                            {r ? (
-                                              <NameItem member={r} align="left" showRole={false} />
-                                            ) : (
-                                              <div className="py-0.5 sm:py-1 md:py-1.5" />
-                                            )}
-                                          </div>
-                                        </React.Fragment>
-                                      )
-                                    }
-                                    return rows
-                                  })()
-                                )}
-                              </TwoColumnLayout>
-                            </div>
-                          )
-                        })()}
-                      </div>
-                    )
-                  }
-                  // Skip rendering for "Parents of the Bride" since it's already rendered above
-                  return null
-                }
-
-                // Special handling for Family of the Groom/Bride - combine into single two-column layout
-                if (category === "Family of the Groom" || category === "Family of the Bride") {
-                  const familyGroom = grouped["Family of the Groom"] || []
-                  const familyBride = grouped["Family of the Bride"] || []
-
-                  if (category === "Family of the Groom") {
-                    return (
-                      <div key="Family">
-                        {categoryIndex > 0 && (
-                          <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                            <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                          </div>
-                        )}
-                        <TwoColumnLayout leftTitle="Family of the Groom" rightTitle="Family of the Bride">
-                          {(() => {
-                            const maxLen = Math.max(familyGroom.length, familyBride.length)
-                            const rows = []
-                            for (let i = 0; i < maxLen; i++) {
-                              const left = familyGroom[i]
-                              const right = familyBride[i]
-                              rows.push(
-                                <React.Fragment key={`family-row-${i}`}>
-                                  <div key={`family-groom-${i}`} className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                    {left ? <NameItem member={left} align="right" /> : <div className="py-0.5" />}
-                                  </div>
-                                  <div key={`family-bride-${i}`} className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                    {right ? <NameItem member={right} align="left" /> : <div className="py-0.5" />}
-                                  </div>
-                                </React.Fragment>
-                              )
-                            }
-                            return rows
-                          })()}
-                        </TwoColumnLayout>
-                      </div>
-                    )
-                  }
-
-                  return null
-                }
-
-                // Man of Honor, Maid/Matron of Honor, and Best Man — Man of Honor above Best Men
-                if (
-                  category === "Man of Honor" ||
-                  category === "Matron of Honor" ||
-                  category === "Maid of Honor" ||
-                  category === "Best Man"
-                ) {
-                  const manOfHonor = grouped["Man of Honor"] || []
-                  const matronOfHonor = grouped["Matron of Honor"] || []
-                  const maidOfHonor = grouped["Maid of Honor"] || []
-                  const bestMan = grouped["Best Man"] || []
-
-                  const firstHonorCategory = HONOR_ATTENDANT_BLOCK_CATEGORIES.find(
-                    (honorCategory) => (grouped[honorCategory]?.length ?? 0) > 0
-                  )
-                  if (category !== firstHonorCategory) return null
-
-                  const hasSideHonors = bestMan.length > 0 || maidOfHonor.length > 0
-                  const hasMatron = matronOfHonor.length > 0
-
-                  return (
-                    <div key="HonorAttendants">
-                      {categoryIndex > 0 && (
-                        <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                          <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                        </div>
-                      )}
-
-                      {manOfHonor.length > 0 && (
-                        <TwoColumnLayout singleTitle="Man of Honor" centerContent={true}>
-                          {manOfHonor.map((member, idx) => (
-                            <div
-                              key={`man-of-honor-${idx}-${member.name}`}
-                              className="col-span-2 flex justify-center min-w-0 overflow-hidden px-0.5 sm:px-1"
-                            >
-                              <NameItem member={member} align="center" />
-                            </div>
-                          ))}
-                        </TwoColumnLayout>
-                      )}
-
-                      {manOfHonor.length > 0 && (hasSideHonors || hasMatron) && (
-                        <div className="flex justify-center py-1 sm:py-2 md:py-2.5 mb-1.5 sm:mb-2.5 md:mb-3">
-                          <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                        </div>
-                      )}
-
-                      {hasSideHonors && (
-                        <TwoColumnLayout leftTitle="Best Man" rightTitle="Maid of Honor">
-                          {(() => {
-                            const maxLen = Math.max(bestMan.length, maidOfHonor.length)
-                            const rows = []
-                            for (let i = 0; i < maxLen; i++) {
-                              const left = bestMan[i]
-                              const right = maidOfHonor[i]
-                              rows.push(
-                                <React.Fragment key={`honor-row-${i}`}>
-                                  <div
-                                    key={`bestman-cell-${i}`}
-                                    className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden"
-                                  >
-                                    {left ? (
-                                      <NameItem member={left} align="right" />
-                                    ) : (
-                                      <div className="py-0.5" />
-                                    )}
-                                  </div>
-                                  <div
-                                    key={`maid-cell-${i}`}
-                                    className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden"
-                                  >
-                                    {right ? (
-                                      <NameItem member={right} align="left" />
-                                    ) : (
-                                      <div className="py-0.5" />
-                                    )}
-                                  </div>
-                                </React.Fragment>
-                              )
-                            }
-                            return rows
-                          })()}
-                        </TwoColumnLayout>
-                      )}
-
-                      {hasSideHonors && hasMatron && (
-                        <div className="flex justify-center py-1 sm:py-2 md:py-2.5 mb-1.5 sm:mb-2.5 md:mb-3">
-                          <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                        </div>
-                      )}
-
-                      {hasMatron && (
-                        <TwoColumnLayout singleTitle="Matron of Honor" centerContent={true}>
-                          {matronOfHonor.map((member, idx) => (
-                            <div
-                              key={`matron-of-honor-${idx}-${member.name}`}
-                              className="col-span-2 flex justify-center min-w-0 overflow-hidden px-0.5 sm:px-1"
-                            >
-                              <NameItem member={member} align="center" showRole={false} />
-                            </div>
-                          ))}
-                        </TwoColumnLayout>
-                      )}
-                    </div>
-                  )
-                }
-
-                // Ring Bearer | Coin Bearer side by side, Bible Bearer centered below
-                if ((BEARER_BLOCK_CATEGORIES as readonly string[]).includes(category)) {
-                  const firstBearer = BEARER_BLOCK_CATEGORIES.find((c) => (grouped[c]?.length ?? 0) > 0)
-                  if (category !== firstBearer) return null
-                  const ringBearer = grouped["Ring Bearer"] || []
-                  const coinBearer = grouped["Coin Bearer"] || []
-                  const bibleBearer = grouped["Bible Bearer"] || []
-                  const hasSidePair = ringBearer.length > 0 || coinBearer.length > 0
-
-                  return (
-                    <div key="BearerBlock">
-                      {categoryIndex > 0 && (
-                        <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                          <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                        </div>
-                      )}
-                      {hasSidePair && (
-                        <TwoColumnLayout
-                          leftTitle={ringBearer.length > 0 ? "Ring Bearer" : undefined}
-                          rightTitle={coinBearer.length > 0 ? "Coin Bearer" : undefined}
-                        >
-                          {renderPairRows("bearer", ringBearer, coinBearer)}
-                        </TwoColumnLayout>
-                      )}
-                      {bibleBearer.length > 0 && (
-                        <TwoColumnLayout singleTitle="Bible Bearer" centerContent={true}>
-                          <div className="col-span-full">
-                            <div className="flex flex-col items-center gap-5 sm:gap-6">
-                              {bibleBearer.map((member, idx) => (
-                                <NameItem key={`bible-bearer-${idx}-${member.name}`} member={member} align="center" />
-                              ))}
-                            </div>
-                          </div>
-                        </TwoColumnLayout>
-                      )}
-                    </div>
-                  )
-                }
-
-                // Two categories side by side (e.g. Little Tiny Groom | Little Promise Bearer)
-                const pairedSection = PAIRED_COLUMN_SECTIONS.find(
-                  (pair) => pair.left === category || pair.right === category
-                )
-                if (pairedSection) {
-                  const leftMembers = grouped[pairedSection.left] || []
-                  const rightMembers = grouped[pairedSection.right] || []
-                  const firstPresent = [pairedSection.left, pairedSection.right].find(
-                    (c) => (grouped[c]?.length ?? 0) > 0
-                  )
-                  if (category !== firstPresent) return null
-
-                  return (
-                    <div key={pairedSection.key}>
-                      {categoryIndex > 0 && (
-                        <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                          <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                        </div>
-                      )}
-                      <TwoColumnLayout
-                        leftTitle={leftMembers.length > 0 ? pairedSection.left : undefined}
-                        rightTitle={rightMembers.length > 0 ? pairedSection.right : undefined}
-                      >
-                        {renderPairRows(pairedSection.key, leftMembers, rightMembers)}
-                      </TwoColumnLayout>
-                    </div>
-                  )
-                }
-
-                // Special handling for Little Groom and Little Bride - combine into single two-column layout
-                if (category === "Little Groom" || category === "Little Bride") {
-                  // Get both little ones groups
-                  const littleGroom = grouped["Little Groom"] || []
-                  const littleBride = grouped["Little Bride"] || []
-                  
-                  // Only render once (when processing "Little Groom")
-                  if (category === "Little Groom") {
-                    return (
-                      <div key="LittleOnes">
-                        {categoryIndex > 0 && (
-                          <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                            <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                          </div>
-                        )}
-                        <TwoColumnLayout leftTitle="Little Groom" rightTitle="Little Bride">
-                          {(() => {
-                            const maxLen = Math.max(littleGroom.length, littleBride.length)
-                            const rows = []
-                            for (let i = 0; i < maxLen; i++) {
-                              const left = littleGroom[i]
-                              const right = littleBride[i]
-                              rows.push(
-                                <React.Fragment key={`little-row-${i}`}>
-                                  <div key={`littlegroom-cell-${i}`} className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                    {left ? <NameItem member={left} align="right" /> : <div className="py-0.5" />}
-                                  </div>
-                                  <div key={`littlebride-cell-${i}`} className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                    {right ? <NameItem member={right} align="left" /> : <div className="py-0.5" />}
-                                  </div>
-                                </React.Fragment>
-                              )
-                            }
-                            return rows
-                          })()}
-                        </TwoColumnLayout>
-                      </div>
-                    )
-                  }
-                  // Skip rendering for "Little Bride" since it's already rendered above
-                  return null
-                }
-
-                if (category === "Flower Ladies") {
-                  if (members.length === 0) return null
-
-                  return (
-                    <div key="FlowerLadies">
-                      {categoryIndex > 0 && (
-                        <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                          <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                        </div>
-                      )}
-                      <TwoColumnLayout singleTitle="Flower Girls" centerContent={true}>
-                        {members.length === 2 ? (
-                          <>
-                            <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                              <NameItem member={members[0]} align="right" />
-                            </div>
-                            <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                              <NameItem member={members[1]} align="left" />
-                            </div>
-                          </>
-                        ) : (
-                          (() => {
-                            const half = Math.ceil(members.length / 2)
-                            const left = members.slice(0, half)
-                            const right = members.slice(half)
-                            const maxLen = Math.max(left.length, right.length)
-                            const rows = []
-                            for (let i = 0; i < maxLen; i++) {
-                              const l = left[i]
-                              const r = right[i]
-                              rows.push(
-                                <React.Fragment key={`flower-lady-row-${i}`}>
-                                  <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                    {l ? (
-                                      <NameItem member={l} align="right" />
-                                    ) : (
-                                      <div className="py-0.5 sm:py-1 md:py-1.5" />
-                                    )}
-                                  </div>
-                                  <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                    {r ? (
-                                      <NameItem member={r} align="left" />
-                                    ) : (
-                                      <div className="py-0.5 sm:py-1 md:py-1.5" />
-                                    )}
-                                  </div>
-                                </React.Fragment>
-                              )
-                            }
-                            return rows
-                          })()
-                        )}
-                      </TwoColumnLayout>
-                    </div>
-                  )
-                }
-
-                // Special handling for Bridesmaids and Groomsmen - combine into single two-column layout
-                if (category === "Bridesmaids" || category === "Groomsmen") {
-                  // Get both bridal party groups
-                  const bridesmaids = grouped["Bridesmaids"] || []
-                  const groomsmen = grouped["Groomsmen"] || []
-                  
-                  // Only render once (when processing "Groomsmen")
-                  if (category === "Groomsmen") {
-                    return (
-                      <React.Fragment key="BridalPartySection">
-                        {/* Groomsmen/Bridesmaids section */}
-                        <div key="BridalParty">
-                          {categoryIndex > 0 && (
-                            <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                              <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                            </div>
-                          )}
-                          <TwoColumnLayout singleTitle="Beloved Entourage">
-                            {(() => {
-                              const maxLen = Math.max(bridesmaids.length, groomsmen.length)
-                              const rows = []
-                              for (let i = 0; i < maxLen; i++) {
-                                const groomsman = groomsmen[i]
-                                const bridesmaid = bridesmaids[i]
-                                rows.push(
-                                  <React.Fragment key={`bridal-row-${i}`}>
-                                    <div key={`groomsman-cell-${i}`} className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                      {groomsman ? <NameItem member={groomsman} align="right" /> : <div className="py-0.5 sm:py-1 md:py-1.5" />}
-                                    </div>
-                                    <div key={`bridesmaid-cell-${i}`} className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                      {bridesmaid ? <NameItem member={bridesmaid} align="left" /> : <div className="py-0.5 sm:py-1 md:py-1.5" />}
-                                    </div>
-                                  </React.Fragment>
-                                )
-                              }
-                              return rows
-                            })()}
-                          </TwoColumnLayout>
-                        </div>
-                      </React.Fragment>
-                    )
-                  }
-                  // Skip rendering for "Bridesmaids" since it's already rendered above
-                  return null
-                }
-
-                // Secondary Sponsors block: render all groups under one heading
-                const secondarySponsorGroups = [
-                  "Candle Sponsors",
-                  "Candle Bearer",
-                  "Veil Sponsors",
-                  "Cord Sponsors",
-                  "Ribbon Sponsors",
-                ] as const
-                if ((secondarySponsorGroups as readonly string[]).includes(category)) {
-                  // Only render the full block once — when processing the first one that exists in order
-                  const firstPresentGroup = secondarySponsorGroups.find((g) => (grouped[g]?.length ?? 0) > 0)
-                  if (category !== firstPresentGroup) return null
-
-                  const renderPairedGroup = (groupName: string) => {
-                    const grpMembers = grouped[groupName] || []
-                    if (grpMembers.length === 0) return null
-                    // Names split into left | right columns
-                    if (TWO_COLUMN_SECONDARY_GROUPS.has(groupName) && grpMembers.length > 1) {
-                      const half = Math.ceil(grpMembers.length / 2)
-                      return (
-                        <div key={groupName} className="mb-1.5 sm:mb-2.5 md:mb-3">
-                          <TwoColumnLayout singleTitle={displayRoleCategory(groupName, grpMembers)} centerContent={true}>
-                            {renderPairRows(groupName, grpMembers.slice(0, half), grpMembers.slice(half))}
-                          </TwoColumnLayout>
-                        </div>
-                      )
-                    }
-                    return (
-                      <div key={groupName} className="mb-1.5 sm:mb-2.5 md:mb-3">
-                        <TwoColumnLayout singleTitle={displayRoleCategory(groupName, grpMembers)} centerContent={true}>
-                          {grpMembers.length === 2 ? (
-                            <>
-                              <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                <NameItem member={grpMembers[0]} align="right" />
-                              </div>
-                              <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                <NameItem member={grpMembers[1]} align="left" />
-                              </div>
-                            </>
-                          ) : (
-                            <div className="col-span-full">
-                              <div className="flex flex-col items-center gap-5 sm:gap-6">
-                                {grpMembers.map((member, idx) => (
-                                  <NameItem key={`${groupName}-${idx}-${member.name}`} member={member} align="center" />
-                                ))}
-                              </div>
-                            </div>
-                          )}
-                        </TwoColumnLayout>
-                      </div>
-                    )
-                  }
-
-                  return (
-                    <div key="SecondarySponsorBlock">
-                      {categoryIndex > 0 && (
-                        <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                          <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                        </div>
-                      )}
-                      {/* Parent heading */}
-                      <div className="mb-1.5 sm:mb-2.5 md:mb-3">
-                        <SectionTitle>Secondary Sponsors</SectionTitle>
-                      </div>
-                      {secondarySponsorGroups.map(renderPairedGroup)}
-                    </div>
-                  )
-                }
-
-                // Default: single title, centered content
-                return (
-                  <div key={category}>
-                    {categoryIndex > 0 && (
-                      <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                            <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                      </div>
-                    )}
-                    <TwoColumnLayout singleTitle={displayRoleCategory(category, members)} centerContent={true}>
-                      {(() => {
-                        // Special rule: paired sponsor roles with exactly 2 names should meet at center
-                        const PAIRED_SECTIONS = new Set(["Candle Sponsors", "Cord Sponsors", "Veil Sponsors", "Ribbon Sponsors", "Little Love Bearer", "Little Promise Bearer"])
-                        if (PAIRED_SECTIONS.has(category) && members.length === 2) {
-                          const left = members[0]
-                          const right = members[1]
-                          return (
-                            <>
-                              <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                <NameItem member={left} align="right" />
-                              </div>
-                              <div className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                <NameItem member={right} align="left" />
-                              </div>
-                            </>
-                          )
-                        }
-                        if (SINGLE_COLUMN_SECTIONS.has(category) || members.length <= 2) {
-                          return (
-                            <div className="col-span-full">
-                              <div className="flex flex-col items-center gap-5 sm:gap-6">
-                                {members.map((member, idx) => (
-                                  <NameItem key={`${category}-${idx}-${member.name}`} member={member} align="center" />
-                                ))}
-                              </div>
-                            </div>
-                          )
-                        }
-                        // Default two-column sections: render row-by-row pairs to keep alignment on small screens
-                        const half = Math.ceil(members.length / 2)
-                        const left = members.slice(0, half)
-                        const right = members.slice(half)
-                        const maxLen = Math.max(left.length, right.length)
-                        const rows = []
-                        for (let i = 0; i < maxLen; i++) {
-                          const l = left[i]
-                          const r = right[i]
-                          rows.push(
-                            <React.Fragment key={`${category}-row-${i}`}>
-                              <div key={`${category}-cell-left-${i}`} className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                {l ? <NameItem member={l} align="right" /> : <div className="py-0.5 sm:py-1 md:py-1.5" />}
-                              </div>
-                              <div key={`${category}-cell-right-${i}`} className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                {r ? <NameItem member={r} align="left" /> : <div className="py-0.5 sm:py-1 md:py-1.5" />}
-                              </div>
-                            </React.Fragment>
-                          )
-                        }
-                        return rows
-                      })()}
-                    </TwoColumnLayout>
-                  </div>
-                )
-              })}
-              
-              {/* Display any other categories not in the ordered list */}
-              {Object.keys(grouped).filter(cat => !ROLE_CATEGORY_ORDER.includes(cat) && cat !== "Other" && cat !== "Peer Sponsors").map((category) => {
-                const members = grouped[category]
-                return (
-                  <div key={category}>
-                    <div className="flex justify-center py-1 sm:py-2.5 md:py-3 mb-1.5 sm:mb-2.5 md:mb-3">
-                      <div className="w-full max-w-md h-px" style={dividerLineStyle} />
-                    </div>
-                    <TwoColumnLayout singleTitle={displayRoleCategory(category, members)} centerContent={true}>
-                      {(() => {
-                        if (SINGLE_COLUMN_SECTIONS.has(category) || members.length <= 2) {
-                          return (
-                            <div className="col-span-full">
-                              <div className="flex flex-col items-center gap-5 sm:gap-6">
-                                {members.map((member, idx) => (
-                                  <NameItem key={`${category}-${idx}-${member.name}`} member={member} align="center" />
-                                ))}
-                              </div>
-                            </div>
-                          )
-                        }
-                        // Pair row-by-row for other categories as well
-                        const half = Math.ceil(members.length / 2)
-                        const left = members.slice(0, half)
-                        const right = members.slice(half)
-                        const maxLen = Math.max(left.length, right.length)
-                        const rows = []
-                        for (let i = 0; i < maxLen; i++) {
-                          const l = left[i]
-                          const r = right[i]
-                          rows.push(
-                            <React.Fragment key={`${category}-row-${i}`}>
-                              <div key={`${category}-cell-left-${i}`} className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                {l ? <NameItem member={l} align="right" /> : <div className="py-0.5 sm:py-1 md:py-1.5" />}
-                              </div>
-                              <div key={`${category}-cell-right-${i}`} className="px-0.5 sm:px-1 md:px-1.5 min-w-0 overflow-hidden">
-                                {r ? <NameItem member={r} align="left" /> : <div className="py-0.5 sm:py-1 md:py-1.5" />}
-                              </div>
-                            </React.Fragment>
-                          )
-                        }
-                        return rows
-                      })()}
-                    </TwoColumnLayout>
-                  </div>
-                )
-              })}
-
+              <CoupleAtTheAltar
+                heading={label(content.coupleHeading)}
+                kicker={content.coupleKicker}
+                line={content.coupleLine}
+                monogram={siteConfig.couple.monogram}
+                groom={{ name: groomName, roleCategory: "The Couple", roleTitle: content.groomRole, email: "" }}
+                bride={{ name: brideName, roleCategory: "The Couple", roleTitle: content.brideRole, email: "" }}
+              />
+              {chapters.map((chapter, index) => (
+                <AisleChapter key={chapter.key} chapter={chapter} numeral={toRoman(index + 1)} />
+              ))}
+              <AisleEnd />
             </>
             )}
+            </div>
           </div>
+          <LaceHem />
+          <CornerBouquet src={decos.cornerBouquet} side="left" />
+          <CornerBouquet src={decos.cornerBouquet} side="right" />
         </div>
-        </div>
-        <DecoImg
-          src={decos.footerVine}
-          className="relative z-20 mx-auto mt-6 block h-auto w-40 select-none opacity-90 sm:mt-12 sm:w-72 md:w-96"
-        />
-      </div>
+        <motion.div
+          initial={{ opacity: 0, y: 20, scale: 0.94 }}
+          whileInView={{ opacity: 1, y: 0, scale: 1 }}
+          viewport={IN_VIEW}
+          transition={{ duration: 1, ease: EASE }}
+        >
+          <DecoImg
+            src={decos.footerVine}
+            className="relative z-20 mx-auto mt-6 block h-auto w-40 select-none opacity-90 sm:mt-12 sm:w-72 md:w-96"
+          />
+        </motion.div>
+      </motion.div>
       </Section>
     </div>
+    </MotionConfig>
   )
 }
