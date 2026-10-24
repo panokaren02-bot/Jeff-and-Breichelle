@@ -316,7 +316,7 @@ const ROLE_CATEGORY_ORDER = [
   "Candle Sponsors",
   "Candle Bearer",
   "Veil Sponsors",
-  "Cord Sponsors",
+  "Cords Sponsors",
   "Ribbon Sponsors",
   "Groomsmen",
   "Bridesmaids",
